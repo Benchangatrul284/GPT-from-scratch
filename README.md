@@ -1,3 +1,3 @@
 # GPT-from-scratch
-ckp 1
-A simple bigram model 
+ckp 4
+Add FFN and multi-head attention
