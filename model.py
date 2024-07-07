@@ -1,126 +1,179 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from thop import profile
+# from thop import profile
+from dataclasses import dataclass
+import math
+import tiktoken as tk
 
-class SHATTN(nn.Module):
-    '''
-    A simple single head of the self-attention mechanism.
-    '''
-    def __init__(self, hidden_size, head_size):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.head_size = head_size
-        self.query = nn.Linear(hidden_size, head_size)
-        self.key = nn.Linear(hidden_size, head_size)
-        self.value = nn.Linear(hidden_size, head_size)
-    
-    def forward(self, x):
-        B,T,D = x.shape
-        k = self.key(x)
-        q = self.query(x)
-        v = self.value(x)
-        # compute attention matrix
-        tril_mask = torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool))
-        attn = (q @ k.transpose(2, 1)) / (self.head_size ** 0.5)
-        attn = attn.masked_fill(tril_mask[:T, :T] == 0, float('-inf'))
-        attn = torch.softmax(attn, dim=2) # A dimension along which Softmax will be computed (so every slice along dim will sum to 1).
-        out = attn @ v
-        return out
+@dataclass
+class GPTConfig:
+    block_size: int = 1024
+    vocab_size: int = 50257
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
 
-class MHATTN(nn.Module):
-    '''
-    Implementation of multi-head attention mechanism.
-    '''
-    def __init__(self, hidden_size, head_size, num_heads):
-        super().__init__()
-        self.heads = nn.ModuleList([SHATTN(hidden_size, head_size) for _ in range(num_heads)])
-    
+class Block(nn.Module):
+    def __init__(self, config):
+        super(Block, self).__init__()
+        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.attn = CasualSelfAttention(config)
+        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.mlp = MLP(config)
+        
     def forward(self, x):
-        return torch.cat([head(x) for head in self.heads], dim=-1) # concatenate the heads along the hidden_size dimension
-
-class FeedForward(nn.Module):
-    '''
-    Implementation of feed-forward layer.
-    '''
-    def __init__(self, hidden_size):
-        super().__init__()
-        self.fc1 = nn.Linear(hidden_size, hidden_size*4)
-        self.fc2 = nn.Linear(hidden_size*4, hidden_size)
-    
-    def forward(self, x):
-        return self.fc2(F.relu(self.fc1(x)))
-    
-class transformer_block(nn.Module):
-    '''
-    Implementation of transformer block.
-    '''
-    def __init__(self, hidden_size, num_heads):
-        super().__init__()
-        head_size = hidden_size // num_heads
-        self.ln1 = nn.LayerNorm(hidden_size)
-        self.ln2 = nn.LayerNorm(hidden_size)
-        self.mhattn = MHATTN(hidden_size, head_size, num_heads)
-        self.ffn = FeedForward(hidden_size)
-
-    def forward(self, x):
-        x = self.ln1(x + self.mhattn(x))
-        x = self.ln2(x + self.ffn(x))
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
         return x
 
-class LanguageModel(nn.Module):
-    '''
-    A very simple language model.
-    '''
-    def __init__(self, vocab_size, hidden_size, block_size, n_layers=2, num_heads=4):
-        super().__init__()
-        self.block_size = block_size
-        self.token_embedding_table = nn.Embedding(num_embeddings=vocab_size,embedding_dim=hidden_size)
-        self.position_embedding_table = nn.Embedding(num_embeddings=block_size,embedding_dim=hidden_size)
-        self.blocks = nn.Sequential(*[transformer_block(hidden_size, num_heads) for _ in range(n_layers)])
-        self.lm_head = nn.Linear(hidden_size, vocab_size)
+class CasualSelfAttention(nn.Module):
+    def __init__(self, config):
+        super(CasualSelfAttention, self).__init__()
+        assert config.n_embd % config.n_head == 0, 'n_embd should be divided by n_head'
+        self.c_attn = nn.Linear(config.n_embd, 3*config.n_embd) # qkv
+        # output projection
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.n_head = config.n_head
+        self.n_embed = config.n_embd
+        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size))
+        
+    def forward(self, x):
+        B,T,D = x.size()
+        qkv = self.c_attn(x)
+        q,k,v = qkv.split(self.n_embed, dim=2)
+        q = q.view(B, T, self.n_head, D//self.n_head).transpose(1, 2) #(B, n_head, T, hidden_size)
+        k = k.view(B, T, self.n_head, D//self.n_head).transpose(1, 2) #(B, n_head, T, hidden_size)
+        v = v.view(B, T, self.n_head, D//self.n_head).transpose(1, 2) #(B, n_head, T, hidden_size)
+        
+        attn = (q @ k.transpose(-2, -1)) * (1. / math.sqrt(k.size(-1))) #(B, n_head, T, T)
+        attn = attn.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
+        attn = F.softmax(attn, dim=-1)
+        y = attn @ v #(B, n_head, T, hidden_size)
+        y = y.transpose(1, 2).contiguous().view(B, T, D) # re-assemble the output (B, T, hidden_size)
+        y = self.c_proj(y)
+        return y
+    
+class MLP(nn.Module):
+    def __init__(self, config):
+        super(MLP, self).__init__()
+        self.c_fc = nn.Linear(config.n_embd, 4*config.n_embd)
+        self.gelu = nn.GELU(approximate='tanh')
+        self.c_proj = nn.Linear(4*config.n_embd, config.n_embd)
+        
+    def forward(self, x):
+        return self.c_proj(self.gelu(self.c_fc(x)))
+    
+class GPT(nn.Module):
+    def __init__(self,config):
+        super(GPT, self).__init__()
+        self.config = config
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(num_embeddings=config.vocab_size, embedding_dim=config.n_embd),
+            wpe = nn.Embedding(num_embeddings=config.block_size, embedding_dim=config.n_embd),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f = nn.LayerNorm(config.n_embd)
+        ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        
+        # weight sharing
+        self.transformer.wte.weight = self.lm_head.weight
         
     def forward(self, idx, targets=None):
-        # idx and targets are both (B,T) tensor of integers
         B,T = idx.shape
-        token_embed = self.token_embedding_table(idx) # (B,T,hidden_size)
-        pos_embed = self.position_embedding_table(torch.arange(T, device=idx.device)) # (B,T,hidden_size)
-        embed = token_embed + pos_embed # (B,T,hidden_size)
-        embed = self.blocks(embed)
-        logits = self.lm_head(embed) # (B,T,vocab_size)
-
+        assert T <= self.config.block_size, 'input sequence length should be less than block size'
+        pos = torch.arange(T, dtype=torch.long, device=idx.device)
+        pos_emb = self.transformer['wpe'](pos) # postional embedding
+        tok_emb = self.transformer['wte'](idx) # token embedding
+        x = tok_emb + pos_emb
+        # Modulelist
+        for block in self.transformer['h']:
+            x = block(x)
+        x = self.transformer['ln_f'](x)
+        logits = self.lm_head(x) # (B,T,vocab_size)
         if targets is None:
             loss = None
         else:
-            B, T, D = logits.shape
-            logits = logits.view(B*T, D)
-            targets = targets.view(B*T)
-            loss = F.cross_entropy(logits, targets)
-
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1)) #(B*T,vocab_size,B*T)
+        
         return logits, loss
-
-    def generate(self, idx, max_new_tokens):
-        # idx is (B, T) array of indices in the current context
-        assert max_new_tokens < self.block_size, f"max_new_tokens ({max_new_tokens}) must be less than block_size ({self.block_size})"
-
-        for _ in range(max_new_tokens):
-            # get the logits for the next token
-            logits, loss = self(idx)
-            # focus only on the last time step
-            logits = logits[:, -1, :] # becomes (B, hidden_size)
-            # apply softmax to get probabilities
-            probs = F.softmax(logits, dim=-1) # (B, hidden_size)
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1).long() # (B, 1)
-            # append sampled index to the running sequence
-            idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
-            
-        return idx
     
+    @classmethod
+    def from_pretrained(cls, model_type):
+        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}, 'model type not supported'
+        from transformers import GPT2LMHeadModel
+        
+        config_args = {
+            'gpt2': {'n_layer': 12, 'n_head': 12, 'n_embd': 768},
+            'gpt2-medium': {'n_layer': 24, 'n_head': 16, 'n_embd': 1024},
+            'gpt2-large': {'n_layer': 36, 'n_head': 20, 'n_embd': 1280},
+            'gpt2-xl': {'n_layer': 48, 'n_head': 25, 'n_embd': 1600}
+        }[model_type]
+        
+        config_args['vocab_size'] = 50257
+        config_args['block_size'] = 1024
+        
+        # bulid the keys and ignore the attn.masked_bias and attn.bias
+        config = GPTConfig(**config_args)
+        model = GPT(config)
+        sd = model.state_dict()
+        sd_keys = sd.keys()
+        # sd_keys = [k for k in sd_keys if not k.endswith('.attn.masked_bias')]
+        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')]
+        
+        # load weights from huggingface model
+        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
+        sd_hf = model_hf.state_dict()
+        sd_keys_hf = sd_hf.keys()
+        
+        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+        # print(sd_keys_hf0)
+        assert len(sd_keys_hf) == len(sd_keys), f'{len(sd_keys_hf)} != {len(sd_keys)}'
+        
+        # start copying the weights
+        # The any() function is a built-in Python function that takes an iterable as its argument and returns True if at least one of the elements in the iterable is true.
+        for k in sd_keys_hf:
+            print(f'Copying {k}......')
+            if any(k.endswith(w) for w in transposed):
+                assert sd_hf[k].shape[::-1] == sd[k].shape, f'{sd_hf[k].shape[::-1]} != {sd[k].shape}'
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k].T)
+            else:
+                assert sd_hf[k].shape == sd[k].shape, f'{sd_hf[k].shape} != {sd[k].shape}'
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k])
+                    
+        model.load_state_dict(sd)
+        return model
+        
+    def generate(self,idx,max_length):
+        B,T = idx.shape
+        assert max_length < self.config.block_size, 'max length should be less than block size'
+        while idx.size(-1) < max_length:
+            logits, _ = self.forward(idx) #(B,T,vocab_size)
+            probs = logits[:, -1,:] #(B,vocab_size)
+            probs = F.softmax(probs, dim=-1) # softmax along the vocab_size dimension
+            # do top _k sampling of k = 50
+            # topk_probs -- > (B,50), topk_indices --> (B,50)
+            topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+            # sample, return the index of the sampled token
+            next_token = torch.multinomial(topk_probs, num_samples=1) #(B,1)
+            # gather all the next tokens
+            # get x_next by collecting reading "topk_indices" with index "next_token" along dim=-1
+            x_next = torch.gather(topk_indices, -1, next_token) 
+            # concatenate the next token to the input along the T dimension
+            idx = torch.cat((idx, x_next), dim=-1)
+        
+        return idx
+        
 
 if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = LanguageModel(vocab_size=52, hidden_size=512, block_size=128).to(device)
-    input = torch.zeros((1, 1), dtype=torch.long, device=device)
-    flops, params = profile(model, inputs=(input, ))
-    print('flops:{}G, params:{}M'.format(2*flops/(1e9), params/(1e6)))
+    text = 'I am a student at'
+    enc = tk.get_encoding('gpt2')
+    tokens = enc.encode(text)
+    input = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0).to(device)
+    model = GPT.from_pretrained('gpt2')
+    model.to(device)
+    model.eval()
+    print(enc.decode(model.generate(input, 100).tolist()[0]))
