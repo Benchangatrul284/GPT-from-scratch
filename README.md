@@ -1,3 +1,3 @@
 # GPT-from-scratch
-ckp 1
-A simple bigram model 
+ckp 2  
+Simple illustration of attention mechanism.  
