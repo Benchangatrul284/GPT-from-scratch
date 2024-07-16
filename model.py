@@ -14,7 +14,7 @@ class SHATTN(nn.Module):
         self.query = nn.Linear(hidden_size, head_size)
         self.key = nn.Linear(hidden_size, head_size)
         self.value = nn.Linear(hidden_size, head_size)
-        self.register_buffer('tril_mask', torch.tril(torch.ones(block_size, block_size)))
+        self.register_buffer('tril_mask', torch.tril(torch.ones(block_size, block_size)),persistent=False)
     
     def forward(self, x):
         B,T,D = x.shape
@@ -24,7 +24,7 @@ class SHATTN(nn.Module):
         # compute attention matrix
         attn = (q @ k.transpose(2, 1)) / (self.head_size ** 0.5)
         attn = attn.masked_fill(self.tril_mask[:T, :T] == 0, float('-inf'))
-        attn = torch.softmax(attn, dim=2) # A dimension along which Softmax will be computed (so every slice along dim will sum to 1).
+        attn = torch.softmax(attn, dim=-1) # A dimension along which Softmax will be computed (so every slice along dim will sum to 1).
         out = attn @ v
         return out
 
