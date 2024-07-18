@@ -34,6 +34,7 @@ def estimate_loss():
     return out
 
 if __name__ == '__main__':
+    torch.manual_seed(42)
     if not os.path.exists('input.txt'):
         print('Downloading input.txt...')
         url = 'https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt'
@@ -41,9 +42,9 @@ if __name__ == '__main__':
     # hyperparameters
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     batch_size = 32 # how many independent sequences will we process in parallel?
-    block_size = 256 # what is the maximum context length for predictions?
+    block_size = 512 # what is the maximum context length for predictions?
     max_steps = 1000
-    eval_interval = 300
+    eval_interval = 500
     learning_rate = 1e-3
     eval_iters = 200
      
@@ -83,6 +84,22 @@ if __name__ == '__main__':
         loss.backward()
         optimizer.step()
 
-    # generate from the model
-    context = torch.zeros((1, 1), dtype=torch.long, device=device)
-    print(decode(model.generate(context, max_new_tokens=100)[0].tolist()))
+    
+    import time
+    start_time = time.time()
+    for _ in range(10):
+        # generate from the model
+        context = torch.zeros((1, 1), dtype=torch.long, device=device)
+        context = model.generate(context, max_new_tokens=100,use_cache=False)
+        print(decode(context[0].tolist()))
+    end_time = time.time()
+    print(f"Generated in {end_time - start_time:.1f} seconds without cache")
+    
+    start_time = time.time()
+    for _ in range(10):
+        # generate from the model
+        context = torch.zeros((1, 1), dtype=torch.long, device=device)
+        context = model.generate(context, max_new_tokens=100,use_cache=True)
+        print(decode(context[0].tolist()))
+    end_time = time.time()
+    print(f"Generated in {end_time - start_time:.1f} seconds with cache")

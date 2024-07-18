@@ -1,3 +1,3 @@
 # GPT-from-scratch
-ckp 4
-Add FFN and multi-head attention
+ckp 6  
+KV-cache
