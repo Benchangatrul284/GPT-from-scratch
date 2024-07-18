@@ -24,7 +24,7 @@ class SHATTN(nn.Module):
         tril_mask = torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool))
         attn = (q @ k.transpose(2, 1)) / (self.head_size ** 0.5)
         attn = attn.masked_fill(tril_mask[:T, :T] == 0, float('-inf'))
-        attn = torch.softmax(attn, dim=2) # A dimension along which Softmax will be computed (so every slice along dim will sum to 1).
+        attn = torch.softmax(attn, dim=2)
         out = attn @ v
         return out
 
@@ -37,8 +37,10 @@ class MHATTN(nn.Module):
         self.heads = nn.ModuleList([SHATTN(hidden_size, head_size) for _ in range(num_heads)])
     
     def forward(self, x):
-        return torch.cat([head(x) for head in self.heads], dim=-1) # concatenate the heads along the hidden_size dimension
-
+        # concatenate the heads along the hidden_size dimension
+        return torch.cat([head(x) for head in self.heads], dim=-1) 
+    
+    
 class FeedForward(nn.Module):
     '''
     Implementation of feed-forward layer.
@@ -50,7 +52,7 @@ class FeedForward(nn.Module):
     
     def forward(self, x):
         return self.fc2(F.relu(self.fc1(x)))
-    
+
 class transformer_block(nn.Module):
     '''
     Implementation of transformer block.
