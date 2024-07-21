@@ -88,7 +88,6 @@ if __name__ == '__main__':
     import time
     start_time = time.time()
     for _ in range(10):
-        # generate from the model
         context = torch.zeros((1, 1), dtype=torch.long, device=device)
         context = model.generate(context, max_new_tokens=100,use_cache=False)
         print(decode(context[0].tolist()))
@@ -97,7 +96,6 @@ if __name__ == '__main__':
     
     start_time = time.time()
     for _ in range(10):
-        # generate from the model
         context = torch.zeros((1, 1), dtype=torch.long, device=device)
         context = model.generate(context, max_new_tokens=100,use_cache=True)
         print(decode(context[0].tolist()))

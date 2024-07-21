@@ -14,8 +14,8 @@ class SHATTN(nn.Module):
         self.query = nn.Linear(hidden_size, head_size)
         self.key = nn.Linear(hidden_size, head_size)
         self.value = nn.Linear(hidden_size, head_size)
-        self.register_buffer('k_cache', tensor=None, persistent=False)
-        self.register_buffer('v_cache', tensor=None, persistent=False)
+        self.register_buffer('k_cache', tensor=None, persistent=False) # new code
+        self.register_buffer('v_cache', tensor=None, persistent=False) # new code
         
     def forward(self, x, use_cache):
         B,T,D = x.shape
@@ -28,7 +28,6 @@ class SHATTN(nn.Module):
             attn = attn.masked_fill(tril_mask[:T, :T] == 0, float('-inf'))
             attn = torch.softmax(attn, dim=2) # A dimension along which Softmax will be computed (so every slice along dim will sum to 1).
             out = attn @ v
-            # print(out.shape)
             return out
         else:
             x = x[:, -1:, :] # only the last token
@@ -44,10 +43,7 @@ class SHATTN(nn.Module):
             v = self.v_cache
             attn = (q @ k.transpose(2, 1)) / (self.head_size ** 0.5)
             attn = torch.softmax(attn, dim=2) # A dimension along which Softmax will be computed (so every slice along dim will sum to 1).
-            # print('attn',attn.shape)
-            # print('v',v.shape)
             out = attn @ v
-            # print('out',out.shape)
             return out
 
 
