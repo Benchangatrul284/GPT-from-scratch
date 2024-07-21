@@ -35,12 +35,63 @@ class MHATTN(nn.Module):
     def __init__(self, hidden_size, head_size, num_heads):
         super().__init__()
         self.heads = nn.ModuleList([SHATTN(hidden_size, head_size) for _ in range(num_heads)])
-    
+
     def forward(self, x):
         # concatenate the heads along the hidden_size dimension
         return torch.cat([head(x) for head in self.heads], dim=-1) 
-    
-    
+
+
+
+def repeat_kv(hidden_states: torch.Tensor, n_rep: int):
+    """
+    Copy and repeak the key and value tensors n_rep times.
+    """
+    B, num_key_value_heads, T, head_size = hidden_states.shape #(B, num_key_value_heads, T, D)
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, None, :, :].expand(B, num_key_value_heads, n_rep, T, head_size)
+    return hidden_states.reshape(B, num_key_value_heads * n_rep, T, head_size)
+
+
+class GQA(nn.Module):
+    '''
+    Implementation of group-query attention.
+    '''
+    def __init__(self, hidden_size, num_key_value_heads, num_attention_heads):
+        super().__init__()
+        self.group = num_key_value_heads
+        self.num_attention_heads = num_attention_heads
+        self.head_dim = hidden_size // num_attention_heads
+        self.hidden_size = hidden_size
+        self.repeat_times = num_attention_heads // num_key_value_heads
+        self.q = nn.Linear(self.hidden_size, self.num_attention_heads * self.head_dim, bias=False)
+        self.k = nn.Linear(self.hidden_size, num_key_value_heads * self.head_dim, bias=False)
+        self.v = nn.Linear(self.hidden_size, num_key_value_heads * self.head_dim, bias=False)
+
+        self.register_buffer('masked_bias', torch.tril(torch.ones(512, 512)).view(1, 1, 512, 512))
+        
+    def forward(self, x):
+        B, T, D = x.shape
+        quires = self.q(x) # (B, T, num_attention_heads * head_dim)
+        keys = self.k(x)
+        values = self.v(x)
+        quires = quires.view(B, T, self.num_attention_heads, self.head_dim).transpose(1, 2) # (B, num_attention_heads, T, head_dim)
+        keys = keys.view(B, T, self.group, self.head_dim).transpose(1, 2) # (B, num_key_value_heads, T, head_dim)
+        values = values.view(B, T, self.group, self.head_dim).transpose(1, 2) # (B, num_key_value_heads, T, head_dim)
+        # repeat the key and value tensors
+        keys = repeat_kv(keys, self.repeat_times) # (B, num_key_value_heads, T, head_dim) -> (B, num_attention_heads, T, head_dim)
+        values = repeat_kv(values, self.repeat_times) # (B, num_key_value_heads, T, head_dim) -> (B, num_attention_heads, T, head_dim)
+        # compute attention matrix
+        tril_mask = torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool)).view(1, 1, T, T)
+        attn = (quires @ keys.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        attn = attn.masked_fill(tril_mask[:, :, :T, :T] == 0, float('-inf'))
+        attn = torch.softmax(attn, dim=-1)
+        out = attn @ values
+        out = out.transpose(1, 2).contiguous()
+        out = out.reshape(B, T, -1)
+        
+        return out
+
 class FeedForward(nn.Module):
     '''
     Implementation of feed-forward layer.
@@ -62,11 +113,12 @@ class transformer_block(nn.Module):
         head_size = hidden_size // num_heads
         self.ln1 = nn.LayerNorm(hidden_size)
         self.ln2 = nn.LayerNorm(hidden_size)
-        self.mhattn = MHATTN(hidden_size, head_size, num_heads)
+        # self.mhattn = MHATTN(hidden_size, head_size, num_heads)
+        self.gqattn = GQA(hidden_size, num_key_value_heads=2, num_attention_heads=num_heads)
         self.ffn = FeedForward(hidden_size)
 
     def forward(self, x):
-        x = self.ln1(x + self.mhattn(x))
+        x = self.ln1(x + self.gqattn(x))
         x = self.ln2(x + self.ffn(x))
         return x
 
@@ -126,3 +178,7 @@ if __name__ == '__main__':
     input = torch.zeros((1, 1), dtype=torch.long, device=device)
     flops, params = profile(model, inputs=(input, ))
     print('flops:{}G, params:{}M'.format(2*flops/(1e9), params/(1e6)))
+    # x = torch.randn((1, 10, 512))
+    # gqa = GQA(hidden_size=512, num_key_value_heads=4, num_attention_heads=8)
+    # x = gqa(x)
+    # print(x.shape)
