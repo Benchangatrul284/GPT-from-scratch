@@ -42,9 +42,9 @@ class MHATTN(nn.Module):
 
 
 
-def repeat_kv(hidden_states: torch.Tensor, n_rep: int):
+def repeat_kv(hidden_states,n_rep):
     """
-    Copy and repeak the key and value tensors n_rep times.
+    Copy and repeat the key and value tensors n_rep times.
     """
     B, num_key_value_heads, T, head_size = hidden_states.shape #(B, num_key_value_heads, T, D)
     if n_rep == 1:
@@ -59,7 +59,7 @@ class GQA(nn.Module):
     '''
     def __init__(self, hidden_size, num_key_value_heads, num_attention_heads):
         super().__init__()
-        self.group = num_key_value_heads
+        self.num_groups  = num_key_value_heads
         self.num_attention_heads = num_attention_heads
         self.head_dim = hidden_size // num_attention_heads
         self.hidden_size = hidden_size
@@ -68,22 +68,20 @@ class GQA(nn.Module):
         self.k = nn.Linear(self.hidden_size, num_key_value_heads * self.head_dim, bias=False)
         self.v = nn.Linear(self.hidden_size, num_key_value_heads * self.head_dim, bias=False)
 
-        self.register_buffer('masked_bias', torch.tril(torch.ones(512, 512)).view(1, 1, 512, 512))
-        
     def forward(self, x):
         B, T, D = x.shape
-        quires = self.q(x) # (B, T, num_attention_heads * head_dim)
+        queries = self.q(x) # (B, T, num_attention_heads * head_dim)
         keys = self.k(x)
         values = self.v(x)
-        quires = quires.view(B, T, self.num_attention_heads, self.head_dim).transpose(1, 2) # (B, num_attention_heads, T, head_dim)
-        keys = keys.view(B, T, self.group, self.head_dim).transpose(1, 2) # (B, num_key_value_heads, T, head_dim)
-        values = values.view(B, T, self.group, self.head_dim).transpose(1, 2) # (B, num_key_value_heads, T, head_dim)
+        queries = queries.view(B, T, self.num_attention_heads, self.head_dim).transpose(1, 2) # (B, num_attention_heads, T, head_dim)
+        keys = keys.view(B, T, self.num_groups, self.head_dim).transpose(1, 2) # (B, num_key_value_heads, T, head_dim)
+        values = values.view(B, T, self.num_groups, self.head_dim).transpose(1, 2) # (B, num_key_value_heads, T, head_dim)
         # repeat the key and value tensors
         keys = repeat_kv(keys, self.repeat_times) # (B, num_key_value_heads, T, head_dim) -> (B, num_attention_heads, T, head_dim)
         values = repeat_kv(values, self.repeat_times) # (B, num_key_value_heads, T, head_dim) -> (B, num_attention_heads, T, head_dim)
         # compute attention matrix
         tril_mask = torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool)).view(1, 1, T, T)
-        attn = (quires @ keys.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        attn = (queries @ keys.transpose(-2, -1)) / (self.head_dim ** 0.5)
         attn = attn.masked_fill(tril_mask[:, :, :T, :T] == 0, float('-inf'))
         attn = torch.softmax(attn, dim=-1)
         out = attn @ values
