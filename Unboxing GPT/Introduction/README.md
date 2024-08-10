@@ -1,3 +1,3 @@
 # GPT-from-scratch
-introduction
-Quick overview of LLM using huggingface transformers
+Introduction  
+[Introduction](https://www.youtube.com/watch?v=OJ_aiOlkEgw)

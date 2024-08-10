@@ -1,3 +1,3 @@
 # GPT-from-scratch
-ckp 6  
-KV-cache
+KV-cache  
+[video](https://www.youtube.com/watch?v=trDKIsUiOH0)

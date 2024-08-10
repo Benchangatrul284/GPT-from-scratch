@@ -1,3 +1,3 @@
 # GPT-from-scratch
-ckp 4
-Add FFN and multi-head attention
+Transformer Block  
+[video](https://youtu.be/duRbg3xpKpU?t=95)

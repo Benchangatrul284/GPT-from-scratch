@@ -1,3 +1,3 @@
 # GPT-from-scratch
-ckp 3  
-implementation of attentions
+Positional Embedding  
+[video](https://www.youtube.com/watch?v=duRbg3xpKpU)

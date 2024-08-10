@@ -1,3 +1,3 @@
 # GPT-from-scratch
-ckp 2  
-Simple illustration of attention mechanism.  
+Attention Mechanism  
+[video](https://youtu.be/Fv0ebRB_49o?t=445)
