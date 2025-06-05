@@ -32,9 +32,9 @@ class GQA(nn.Module):
         
     def forward(self, x):
         B, T, D = x.shape
-        queries = self.q(x) # (B, T, num_attention_heads * head_dim)
-        keys = self.k(x)
-        values = self.v(x)
+        queries = self.q_proj(x) # (B, T, num_attention_heads * head_dim)
+        keys = self.k_proj(x)
+        values = self.v_proj(x)
         queries = queries.view(B, T, self.num_attention_heads, self.head_dim).transpose(1, 2) # (B, num_attention_heads, T, head_dim)
         keys = keys.view(B, T, self.num_groups, self.head_dim).transpose(1, 2) # (B, num_key_value_heads, T, head_dim)
         values = values.view(B, T, self.num_groups, self.head_dim).transpose(1, 2) # (B, num_key_value_heads, T, head_dim)
