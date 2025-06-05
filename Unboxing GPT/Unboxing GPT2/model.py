@@ -18,7 +18,7 @@ class Block(nn.Module):
     def __init__(self, config):
         super(Block, self).__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
-        self.attn = CasualSelfAttention(config)
+        self.attn = CausalSelfAttention(config)
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP(config)
         
@@ -27,9 +27,9 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
-class CasualSelfAttention(nn.Module):
+class CausalSelfAttention(nn.Module):
     def __init__(self, config):
-        super(CasualSelfAttention, self).__init__()
+        super(CausalSelfAttention, self).__init__()
         assert config.n_embd % config.n_head == 0, 'n_embd should be divided by n_head'
         self.c_attn = nn.Linear(config.n_embd, 3*config.n_embd) # qkv
         # output projection
